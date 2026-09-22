@@ -32,6 +32,17 @@ On a miss, the bot uploads the video or its parts to the group and records their
 
 The database lives on the `cache-index` Docker volume. Keep that volume when recreating the container; deleting it loses the index. The cached videos themselves remain in the Telegram group.
 
+## Optional Cloudflare WARP proxy
+
+If YouTube blocks the server's IP, the included Compose overlay can route yt-dlp through Cloudflare WARP's free local proxy. It uses Cloudflare's official Linux client in a separate container; only yt-dlp uses it. The proxy has no published host port, and its registration persists in the `warp-state` volume.
+
+```sh
+docker compose -f compose.yaml -f compose.warp.yaml up --build -d
+docker compose -f compose.yaml -f compose.warp.yaml ps
+```
+
+Confirm that `warp` is healthy before sending a new link. The proxy applies to metadata and the full media download. YouTube may also block WARP's shared exit IP, so a working test is required for each deployment. To stop using WARP, start the base Compose file again and remove `YOUTUBE_PROXY` from `.env` if you set it manually.
+
 ## Configuration
 
 | Variable | Purpose |

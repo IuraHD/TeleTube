@@ -1,0 +1,26 @@
+services:
+  warp:
+    build: ./warp
+    volumes:
+      - warp-state:/var/lib/cloudflare-warp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 15 --proxy socks5h://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on'"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 45s
+    logging:
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  bot:
+    depends_on:
+      warp:
+        condition: service_healthy
+    environment:
+      YOUTUBE_PROXY: socks5h://warp:40000
+
+volumes:
+  warp-state:

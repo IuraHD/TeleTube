@@ -278,3 +278,68 @@ def test_cached_link_still_offers_uncached_qualities(monkeypatch, tmp_path):
             await bot.session.close()
 
     asyncio.run(scenario())
+
+
+def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path):
+    source = tmp_path / "fixture.mp4"
+    make_video(source)
+    chat = Chat(id=123, type="private")
+    user = User(id=42, is_bot=False, first_name="Owner")
+    edits = []
+    uploads = []
+
+    async def fake_call(self, method, request_timeout=None):
+        if isinstance(method, SendMessage):
+            return Message(message_id=101, date=datetime.now(timezone.utc),
+                           chat=chat, text=method.text)
+        if isinstance(method, EditMessageText):
+            edits.append(method)
+            return True
+        if isinstance(method, SendVideo):
+            uploads.append(method)
+            return Message(message_id=500 + len(uploads), date=datetime.now(timezone.utc),
+                           chat=chat)
+        if isinstance(method, AnswerCallbackQuery):
+            return True
+        raise AssertionError(type(method))
+
+    def fake_download(url, height, directory, cancel, on_progress=None):
+        destination = directory / "source.mp4"
+        shutil.copyfile(source, destination)
+        return destination
+
+    monkeypatch.setattr(Bot, "__call__", fake_call)
+    monkeypatch.setattr(bot_module, "get_info",
+                        lambda url: {"title": "Fixture", "qualities": [240]})
+    monkeypatch.setattr(bot_module, "download", fake_download)
+    monkeypatch.setattr(bot_module, "prepare_video", lambda path, limit, cancel: [path, path])
+
+    async def scenario():
+        settings = Settings("123:abc", tmp_path / "downloads", False,
+                            "http://127.0.0.1:8081", 2, 47_000_000,
+                            -100999, tmp_path / "data" / "cache.sqlite3")
+        dp = create_dispatcher(settings)
+        bot = Bot(settings.token)
+        try:
+            message = Message(message_id=1, date=datetime.now(timezone.utc),
+                              chat=chat, from_user=user,
+                              text="https://youtu.be/abcdefghijk")
+            await dp.feed_update(bot, Update(update_id=1, message=message))
+            choice = edits[-1].reply_markup.inline_keyboard[0][0].callback_data
+            callback = CallbackQuery(id="1", from_user=user, chat_instance="test",
+                                     message=Message(message_id=101,
+                                                     date=datetime.now(timezone.utc), chat=chat),
+                                     data=choice)
+            await dp.feed_update(bot, Update(update_id=2, callback_query=callback))
+            for _ in range(100):
+                if len(uploads) == 2:
+                    break
+                await asyncio.sleep(0.05)
+            assert [item.chat_id for item in uploads] == [123, 123]
+            assert Cache(settings.cache_db_path, -100999).get(
+                "https://www.youtube.com/watch?v=abcdefghijk", 240) is None
+        finally:
+            await dp.emit_shutdown()
+            await bot.session.close()
+
+    asyncio.run(scenario())

@@ -31,7 +31,7 @@ class Cache:
         if not row:
             return None
         ids = json.loads(row[0])
-        return ids if isinstance(ids, list) and ids and all(isinstance(i, int) and i > 0 for i in ids) else None
+        return ids if isinstance(ids, list) and len(ids) == 1 and isinstance(ids[0], int) and ids[0] > 0 else None
 
     def qualities(self, video_url: str) -> list[int]:
         with self._connect() as db:
@@ -42,8 +42,8 @@ class Cache:
         return [height for (height,) in rows if self.get(video_url, height)]
 
     def put(self, video_url: str, height: int, message_ids: list[int]) -> None:
-        if not message_ids or any(i <= 0 for i in message_ids):
-            raise ValueError("Only fully sent Telegram messages can be cached")
+        if len(message_ids) != 1 or message_ids[0] <= 0:
+            raise ValueError("Only a complete video in one Telegram message can be cached")
         with self._connect() as db:
             db.execute("""INSERT OR REPLACE INTO cached_video
                           (video_url, height, chat_id, message_ids) VALUES (?, ?, ?, ?)""",

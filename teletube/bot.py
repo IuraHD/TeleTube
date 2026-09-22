@@ -189,7 +189,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                                                         settings.upload_limit, job.cancel)
                         logger.info("Prepared %s part(s) for chat %s", len(parts), chat_id)
                         saved_ids = []
-                        if cache and chat_id != cache.chat_id:
+                        if cache and chat_id != cache.chat_id and len(parts) == 1:
                             try:
                                 for index, part in enumerate(parts, 1):
                                     if job.cancel.is_set():

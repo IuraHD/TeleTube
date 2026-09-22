@@ -28,7 +28,7 @@ Without a cache group, every request downloads and sends the video again. To reu
    docker compose up -d --force-recreate
    ```
 
-On a miss, the bot uploads the video or its parts to the group and records their message IDs in SQLite. When you send a cached link again, it checks YouTube for the full quality list; if YouTube is unavailable, it offers the cached resolutions. Selecting a cached resolution copies its messages to the requester without downloading the file again. The key is the YouTube video and selected resolution. If a cached group message has been deleted, the bot removes that entry and downloads the video again. A failed cache upload falls back to direct delivery.
+On a miss, the bot uploads a complete video to the group and records its message ID in SQLite. If a video must be split to fit Telegram's upload limit, its parts are sent directly to the requester and are not cached. When you send a cached link again, the bot checks YouTube for the full quality list; if YouTube is unavailable, it offers the cached resolutions. Selecting a cached resolution copies its message to the requester without downloading the file again. The key is the YouTube video and selected resolution. If a cached group message has been deleted, the bot removes that entry and downloads the video again. A failed cache upload falls back to direct delivery.
 
 The database lives on the `cache-index` Docker volume. Keep that volume when recreating the container; deleting it loses the index. The cached videos themselves remain in the Telegram group.
 

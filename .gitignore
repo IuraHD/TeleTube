@@ -137,6 +137,7 @@ bot.log
 # Downloads directory (contains user downloads)
 downloads/
 !downloads/.gitkeep
+data/
 
 # Virtual environment
 venv/

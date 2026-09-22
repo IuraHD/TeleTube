@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+import teletube.media as media
 from teletube.media import Cancelled, available_qualities, media_details, prepare_video, video_url
 
 
@@ -32,6 +33,33 @@ def test_unique_qualities():
         {"height": None, "vcodec": "none", "ext": "m4a"},
     ]}
     assert available_qualities(info) == [720, 480]
+
+
+def test_youtube_proxy_applies_to_metadata_and_download(monkeypatch, tmp_path):
+    options_seen = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            options_seen.append(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def extract_info(self, url, download):
+            if download:
+                (tmp_path / "source.mp4").write_bytes(b"video")
+            return {"title": "Fixture", "formats": []}
+
+    monkeypatch.setenv("YOUTUBE_PROXY", "socks5://proxy.example:1080")
+    monkeypatch.setattr(media, "YoutubeDL", FakeYoutubeDL)
+    media.get_info("https://www.youtube.com/watch?v=abcdefghijk")
+    media.download("https://www.youtube.com/watch?v=abcdefghijk", 240,
+                   tmp_path, threading.Event())
+    assert [options["proxy"] for options in options_seen] == [
+        "socks5://proxy.example:1080", "socks5://proxy.example:1080"]
 
 
 def make_video(path, seconds=5, codec="libx264"):

@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -48,8 +49,11 @@ def available_qualities(info: dict) -> list[int]:
 
 
 def get_info(url: str) -> dict:
-    with YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True,
-                    "socket_timeout": 20, "retries": 2, "extract_flat": False}) as ydl:
+    options = {"quiet": True, "no_warnings": True, "noplaylist": True,
+               "socket_timeout": 20, "retries": 2, "extract_flat": False}
+    if proxy := os.getenv("YOUTUBE_PROXY", "").strip():
+        options["proxy"] = proxy
+    with YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
     if not info or info.get("_type") == "playlist":
         raise ValueError("Only single videos are supported")
@@ -89,6 +93,8 @@ def download(url: str, height: int, directory: Path, cancel: threading.Event,
         "merge_output_format": "mp4", "progress_hooks": [progress],
         "restrictfilenames": True, "overwrites": True,
     }
+    if proxy := os.getenv("YOUTUBE_PROXY", "").strip():
+        options["proxy"] = proxy
     with YoutubeDL(options) as ydl:
         ydl.extract_info(url, download=True)
     _check(cancel)

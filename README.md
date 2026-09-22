@@ -16,6 +16,8 @@ Send the bot a YouTube watch, Shorts, live, embed, or `youtu.be` link. It offers
 
 The status message shows download and upload progress. When the upload bar reaches 100%, the file has been read from disk; the bot still waits for Telegram to confirm delivery before showing that the job is done. Each job has its own temporary directory, which is removed afterward. A restart discards pending selections and downloads.
 
+After a video is sent in a private chat, its status message offers optional 25, 50, and 100 Star support buttons. `/donate` shows the same choices at any time. Each button uses a Telegram invoice link to open the native Stars payment screen; it does not post an invoice message in the chat. Telegram sends a pre-checkout query before charging, and the bot records successful payment IDs in the SQLite database on the `cache-index` volume so a payment can be located for a refund. Donations do not change download access.
+
 ## Cache videos in a private group
 
 Without a cache group, every request downloads and sends the video again. To reuse previous uploads:

@@ -3,14 +3,17 @@ import shutil
 from datetime import datetime, timezone
 
 from aiogram import Bot
-from aiogram.methods import (AnswerCallbackQuery, CopyMessage, EditMessageText,
-                             SendDocument, SendMessage, SendVideo)
-from aiogram.types import CallbackQuery, Chat, Message, Update, User
+from aiogram.methods import (AnswerCallbackQuery, AnswerPreCheckoutQuery, CopyMessage,
+                             CreateInvoiceLink, EditMessageText, SendDocument,
+                             SendMessage, SendVideo)
+from aiogram.types import (CallbackQuery, Chat, Message, PreCheckoutQuery,
+                           SuccessfulPayment, Update, User)
 
 import teletube.bot as bot_module
 from teletube.bot import create_dispatcher
 from teletube.config import Settings
 from teletube.cache import Cache
+from teletube.donations import payload_for
 
 from test_media import make_video
 
@@ -105,6 +108,8 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
 
     async def fake_call(self, method, request_timeout=None):
         nonlocal sequence
+        if isinstance(method, CreateInvoiceLink):
+            return f"https://t.me/${method.prices[0].amount}"
         if isinstance(method, SendMessage):
             sequence += 1
             return Message(message_id=sequence, date=datetime.now(timezone.utc),
@@ -184,6 +189,8 @@ def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_pa
 
     async def fake_call(self, method, request_timeout=None):
         nonlocal sequence
+        if isinstance(method, CreateInvoiceLink):
+            return f"https://t.me/${method.prices[0].amount}"
         if isinstance(method, SendMessage):
             sequence += 1
             return Message(message_id=sequence, date=datetime.now(timezone.utc),
@@ -246,6 +253,8 @@ def test_cached_link_still_offers_uncached_qualities(monkeypatch, tmp_path):
     edits = []
 
     async def fake_call(self, method, request_timeout=None):
+        if isinstance(method, CreateInvoiceLink):
+            return f"https://t.me/${method.prices[0].amount}"
         if isinstance(method, SendMessage):
             return Message(message_id=101, date=datetime.now(timezone.utc),
                            chat=chat, text=method.text)
@@ -273,6 +282,72 @@ def test_cached_link_still_offers_uncached_qualities(monkeypatch, tmp_path):
             await dp.feed_update(bot, Update(update_id=1, message=message))
             buttons = edits[-1].reply_markup.inline_keyboard
             assert [row[0].text for row in buttons] == ["1080p", "240p"]
+        finally:
+            await dp.emit_shutdown()
+            await bot.session.close()
+
+    asyncio.run(scenario())
+
+
+def test_stars_donation_opens_invoice_link_and_records_receipt(monkeypatch, tmp_path):
+    chat = Chat(id=123, type="private")
+    user = User(id=42, is_bot=False, first_name="Owner")
+    links = []
+    messages = []
+    checkouts = []
+
+    async def fake_call(self, method, request_timeout=None):
+        if isinstance(method, CreateInvoiceLink):
+            links.append(method)
+            return f"https://t.me/${method.prices[0].amount}"
+        if isinstance(method, SendMessage):
+            messages.append(method)
+            return Message(message_id=100 + len(messages), date=datetime.now(timezone.utc),
+                           chat=chat, text=method.text)
+        if isinstance(method, AnswerPreCheckoutQuery):
+            checkouts.append(method)
+            return True
+        raise AssertionError(type(method))
+
+    monkeypatch.setattr(Bot, "__call__", fake_call)
+
+    async def scenario():
+        path = tmp_path / "data" / "cache.sqlite3"
+        settings = Settings("123:abc", tmp_path / "downloads", False,
+                            "http://127.0.0.1:8081", 2, 47_000_000,
+                            cache_db_path=path)
+        dp = create_dispatcher(settings)
+        bot = Bot(settings.token)
+        try:
+            donate = Message(message_id=1, date=datetime.now(timezone.utc),
+                             chat=chat, from_user=user, text="/donate")
+            await dp.feed_update(bot, Update(update_id=1, message=donate))
+            assert [link.prices[0].amount for link in links] == [25, 50, 100]
+            assert all(link.currency == "XTR" and link.provider_token is None for link in links)
+            buttons = messages[-1].reply_markup.inline_keyboard[0]
+            assert [button.url for button in buttons] == [
+                "https://t.me/$25", "https://t.me/$50", "https://t.me/$100"]
+
+            valid = PreCheckoutQuery(id="valid", from_user=user, currency="XTR",
+                                     total_amount=50, invoice_payload=payload_for(50))
+            invalid = PreCheckoutQuery(id="invalid", from_user=user, currency="XTR",
+                                       total_amount=100, invoice_payload=payload_for(50))
+            await dp.feed_update(bot, Update(update_id=2, pre_checkout_query=valid))
+            await dp.feed_update(bot, Update(update_id=3, pre_checkout_query=invalid))
+            assert [answer.ok for answer in checkouts] == [True, False]
+
+            payment = SuccessfulPayment(currency="XTR", total_amount=50,
+                                        invoice_payload=payload_for(50),
+                                        telegram_payment_charge_id="charge-1",
+                                        provider_payment_charge_id="")
+            receipt = Message(message_id=2, date=datetime.now(timezone.utc), chat=chat,
+                              from_user=user, successful_payment=payment)
+            await dp.feed_update(bot, Update(update_id=4, message=receipt))
+            await dp.feed_update(bot, Update(update_id=5, message=receipt))
+            assert sum("Thank you" in message.text for message in messages) == 1
+            import sqlite3
+            with sqlite3.connect(path) as db:
+                assert db.execute("SELECT payer_id, amount FROM donation_receipt").fetchall() == [(42, 50)]
         finally:
             await dp.emit_shutdown()
             await bot.session.close()

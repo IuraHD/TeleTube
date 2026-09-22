@@ -16,10 +16,12 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                           LabeledPrice, Message, PreCheckoutQuery)
 
 from teletube.cache import Cache
 from teletube.config import Settings
+from teletube.donations import AMOUNTS, DonationReceipts, amount_from, payload_for
 from teletube.media import Cancelled, download, get_info, media_details, prepare_video, video_url
 from teletube.progress import ProgressInputFile, progress_bar
 
@@ -59,7 +61,32 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
     cache = Cache(settings.cache_db_path, settings.cache_chat_id) if settings.cache_chat_id else None
     cache_locks: dict[tuple[str, int], asyncio.Lock] = {}
+    donation_links: dict[int, str] = {}
+    donation_lock = asyncio.Lock()
     settings.download_dir.mkdir(parents=True, exist_ok=True)
+
+    async def donation_keyboard(bot: Bot) -> InlineKeyboardMarkup | None:
+        try:
+            async with donation_lock:
+                for amount in AMOUNTS:
+                    if amount not in donation_links:
+                        donation_links[amount] = await bot.create_invoice_link(
+                            title="Support TeleTube",
+                            description="Optional support for running TeleTube.",
+                            payload=payload_for(amount), currency="XTR",
+                            prices=[LabeledPrice(label="Donation", amount=amount)],
+                        )
+        except Exception:
+            logger.warning("Could not create Stars donation links", exc_info=True)
+            return None
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"Donate ⭐{amount}", url=donation_links[amount])
+            for amount in AMOUNTS
+        ]])
+
+    async def completion_status(bot: Bot, chat_id: int, message_id: int, text: str) -> None:
+        markup = await donation_keyboard(bot) if chat_id > 0 else None
+        await status(bot, chat_id, message_id, text, markup)
 
     async def status(bot: Bot, chat_id: int, message_id: int, text: str,
                      reply_markup: InlineKeyboardMarkup | None = None) -> None:
@@ -142,7 +169,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                                 raise RuntimeError("Cache delivery stopped after some parts")
                         else:
                             logger.info("Delivered cached video to chat %s", chat_id)
-                            await status(bot, chat_id, message_id, "Sent from cache.")
+                            await completion_status(bot, chat_id, message_id, "Sent from cache.")
                             return
 
                 async with semaphore:
@@ -231,7 +258,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                             logger.info("Delivered part %s/%s for chat %s", index, len(parts), chat_id)
                     if job.cancel.is_set():
                         raise Cancelled()
-                    await status(bot, chat_id, message_id, "Done.")
+                    await completion_status(bot, chat_id, message_id, "Done.")
         except Cancelled:
             await status(bot, chat_id, message_id, "Cancelled.")
         except asyncio.CancelledError:
@@ -254,7 +281,48 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
-        await message.answer("Send a YouTube video link and choose a quality.")
+        markup = await donation_keyboard(message.bot) if message.chat.type == "private" else None
+        await message.answer("Send a YouTube video link and choose a quality. "
+                             "You can also use /donate to support the bot.", reply_markup=markup)
+
+    @router.message(Command("donate"))
+    async def donate(message: Message) -> None:
+        if message.chat.type != "private":
+            await message.answer("Open a private chat with me and send /donate.")
+            return
+        markup = await donation_keyboard(message.bot)
+        if markup:
+            await message.answer("Optional support for TeleTube. Choose an amount in Stars:",
+                                 reply_markup=markup)
+        else:
+            await message.answer("Stars donations are temporarily unavailable. Try again later.")
+
+    @router.pre_checkout_query()
+    async def pre_checkout(query: PreCheckoutQuery) -> None:
+        amount = amount_from(query.invoice_payload, query.currency, query.total_amount)
+        if amount is None:
+            await query.answer(ok=False, error_message="This donation amount is no longer available.")
+            return
+        await query.answer(ok=True)
+
+    @router.message(F.successful_payment)
+    async def donation_paid(message: Message) -> None:
+        payment = message.successful_payment
+        if not payment or not message.from_user:
+            return
+        amount = amount_from(payment.invoice_payload, payment.currency, payment.total_amount)
+        if amount is None:
+            logger.warning("Received an unrecognized Stars payment")
+            return
+        try:
+            receipts = DonationReceipts(settings.cache_db_path)
+            is_new = receipts.record(payment.telegram_payment_charge_id,
+                                     message.from_user.id, amount)
+        except Exception:
+            logger.exception("Could not save a Stars donation receipt")
+            is_new = True
+        if is_new:
+            await message.answer(f"Thank you for supporting TeleTube with {amount} Stars!")
 
     @router.message(Command("chatid"))
     async def chatid(message: Message) -> None:

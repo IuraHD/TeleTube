@@ -1,13 +1,6 @@
-#!/bin/bash
-# YouTube Downloader Bot - Run without Local API (Linux/Mac) v3.0
-
-echo "[*] Starting YouTube Bot with Standard API..."
-
-# Set environment variables for standard API
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
 export USE_LOCAL_API=false
-export MAX_FILE_SIZE_MB=50
-echo "[+] Configuration set for standard API (50MB file limit)"
-
-echo "[*] Starting bot with Standard Telegram API..."
-source venv/bin/activate
-python yt_downloader_bot.py
+if [ -x venv/bin/python ]; then exec venv/bin/python yt_downloader_bot.py; fi
+exec python3 yt_downloader_bot.py

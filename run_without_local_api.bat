@@ -1,14 +1,5 @@
 @echo off
-
-echo Starting YouTube Bot with Standard API...
-
-:: Set environment variables for standard API
+setlocal
+cd /d "%~dp0"
 set USE_LOCAL_API=false
-set MAX_FILE_SIZE_MB=50
-echo Configuration set for standard API (50MB file limit)
-
-echo Starting bot with Standard Telegram API...
-call venv\Scripts\activate.bat
-python yt_downloader_bot.py
-
-pause
+if exist venv\Scripts\python.exe (venv\Scripts\python.exe yt_downloader_bot.py) else (py -3 yt_downloader_bot.py)

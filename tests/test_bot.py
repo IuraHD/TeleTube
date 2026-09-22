@@ -325,6 +325,7 @@ def test_stars_donation_opens_invoice_link_and_records_receipt(monkeypatch, tmp_
             assert [link.prices[0].amount for link in links] == [25, 50, 100]
             assert all(link.currency == "XTR" and link.provider_token is None for link in links)
             buttons = messages[-1].reply_markup.inline_keyboard[0]
+            assert [button.text for button in buttons] == ["25", "50", "100"]
             assert [button.url for button in buttons] == [
                 "https://t.me/$25", "https://t.me/$50", "https://t.me/$100"]
 

@@ -80,7 +80,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
             logger.warning("Could not create Stars donation links", exc_info=True)
             return None
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"Donate ⭐{amount}", url=donation_links[amount])
+            InlineKeyboardButton(text=str(amount), url=donation_links[amount])
             for amount in AMOUNTS
         ]])
 

@@ -173,3 +173,65 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
             await bot.session.close()
 
     asyncio.run(scenario())
+
+
+def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_path):
+    chat = Chat(id=123, type="private")
+    user = User(id=42, is_bot=False, first_name="Owner")
+    edits = []
+    copies = []
+    sequence = 100
+
+    async def fake_call(self, method, request_timeout=None):
+        nonlocal sequence
+        if isinstance(method, SendMessage):
+            sequence += 1
+            return Message(message_id=sequence, date=datetime.now(timezone.utc),
+                           chat=chat, text=method.text)
+        if isinstance(method, EditMessageText):
+            edits.append(method)
+            return True
+        if isinstance(method, CopyMessage):
+            copies.append(method)
+            return True
+        if isinstance(method, AnswerCallbackQuery):
+            return True
+        raise AssertionError(type(method))
+
+    def unavailable(*args, **kwargs):
+        raise AssertionError("A cache hit must not contact YouTube or download")
+
+    monkeypatch.setattr(Bot, "__call__", fake_call)
+    monkeypatch.setattr(bot_module, "get_info", unavailable)
+    monkeypatch.setattr(bot_module, "download", unavailable)
+
+    async def scenario():
+        settings = Settings("123:abc", tmp_path / "downloads", False,
+                            "http://127.0.0.1:8081", 2, 47_000_000,
+                            -100999, tmp_path / "data" / "cache.sqlite3")
+        url = "https://www.youtube.com/watch?v=abcdefghijk"
+        Cache(settings.cache_db_path, -100999).put(url, 240, [500])
+        dp = create_dispatcher(settings)
+        bot = Bot(settings.token)
+        try:
+            message = Message(message_id=1, date=datetime.now(timezone.utc),
+                              chat=chat, from_user=user,
+                              text="https://youtu.be/abcdefghijk")
+            await dp.feed_update(bot, Update(update_id=1, message=message))
+            choice = edits[-1].reply_markup.inline_keyboard[0][0].callback_data
+            callback = CallbackQuery(id="1", from_user=user, chat_instance="test",
+                                     message=Message(message_id=101,
+                                                     date=datetime.now(timezone.utc), chat=chat),
+                                     data=choice)
+            await dp.feed_update(bot, Update(update_id=2, callback_query=callback))
+            for _ in range(100):
+                if copies:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(copies) == 1
+            assert copies[0].from_chat_id == -100999
+        finally:
+            await dp.emit_shutdown()
+            await bot.session.close()
+
+    asyncio.run(scenario())

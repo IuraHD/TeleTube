@@ -284,8 +284,13 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
         pending = Job(nonce, url, "", [], threading.Event())
         jobs[key] = pending
         try:
-            async with semaphore:
-                info = await asyncio.to_thread(get_info, url)
+            cached_qualities = cache.qualities(url) if cache and message.chat.id != cache.chat_id else []
+            if cached_qualities:
+                info = {"title": "Cached YouTube video", "qualities": cached_qualities}
+                logger.info("Offering cached qualities for chat %s without contacting YouTube", key[0])
+            else:
+                async with semaphore:
+                    info = await asyncio.to_thread(get_info, url)
             if jobs.get(key) is not pending:
                 return
             if not info["qualities"]:
@@ -307,10 +312,14 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
             await status(message.bot, message.chat.id, notice.message_id,
                          f"<b>{html.escape(job.title[:200])}</b>\n"
                          f"{summary}Choose quality:", keyboard(job))
-        except Exception:
+        except Exception as error:
             logger.exception("Failed to read video metadata")
+            explanation = ("YouTube is blocking requests from this server right now. "
+                           "Previously cached videos are still available."
+                           if "Sign in to confirm" in str(error) else
+                           "Could not read this video's details. Check the link and try again.")
             await status(message.bot, message.chat.id, notice.message_id,
-                         "Could not read this video's details. Check the link and try again.")
+                         explanation)
             if jobs.get(key) is pending:
                 jobs.pop(key, None)
 

@@ -28,7 +28,7 @@ Without a cache group, every request downloads and sends the video again. To reu
    docker compose up -d --force-recreate
    ```
 
-On a miss, the bot uploads the video or its parts to the group and records their message IDs in SQLite. On a hit, it copies those messages to the requester without downloading or uploading the files again. The key is the YouTube video and selected resolution. If a cached group message has been deleted, the bot removes that entry and downloads the video again. A failed cache upload falls back to direct delivery.
+On a miss, the bot uploads the video or its parts to the group and records their message IDs in SQLite. On a hit, it offers the cached resolutions without contacting YouTube, then copies the selected messages to the requester. The key is the YouTube video and selected resolution. If a cached group message has been deleted, the bot removes that entry and downloads the video again. A failed cache upload falls back to direct delivery.
 
 The database lives on the `cache-index` Docker volume. Keep that volume when recreating the container; deleting it loses the index. The cached videos themselves remain in the Telegram group.
 
@@ -48,7 +48,7 @@ The standard Telegram Bot API permits files up to 50 MB, so TeleTube limits each
 
 TeleTube does not re-encode video. It sends compatible H.264/AAC MP4 files as Telegram videos, using their duration and dimensions; other formats go as documents. FFmpeg merges separate audio and video streams when necessary and splits oversized files at existing keyframes without changing their codecs. If keyframes do not allow parts below the upload limit, choose a lower resolution or use a local Bot API server.
 
-YouTube may change its formats or block some downloads. TeleTube does not accept account credentials or cookies. For errors, inspect `docker compose logs bot`.
+YouTube may change its formats or block some downloads, especially from cloud server IPs. Cached videos remain available when fresh extraction is blocked. TeleTube does not accept account credentials or cookies. For errors, inspect `docker compose logs bot`.
 
 ## Test
 

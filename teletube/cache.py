@@ -33,6 +33,14 @@ class Cache:
         ids = json.loads(row[0])
         return ids if isinstance(ids, list) and ids and all(isinstance(i, int) and i > 0 for i in ids) else None
 
+    def qualities(self, video_url: str) -> list[int]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT height FROM cached_video WHERE video_url=? AND chat_id=? ORDER BY height DESC",
+                (video_url, self.chat_id),
+            ).fetchall()
+        return [height for (height,) in rows if self.get(video_url, height)]
+
     def put(self, video_url: str, height: int, message_ids: list[int]) -> None:
         if not message_ids or any(i <= 0 for i in message_ids):
             raise ValueError("Only fully sent Telegram messages can be cached")

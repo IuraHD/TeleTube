@@ -9,9 +9,12 @@ def test_cache_index_persists_and_is_scoped_to_group(tmp_path):
     first = Cache(path, -100123)
     first.put("https://www.youtube.com/watch?v=abcdefghijk", 720, [10, 11])
     assert Cache(path, -100123).get("https://www.youtube.com/watch?v=abcdefghijk", 720) == [10, 11]
+    assert first.qualities("https://www.youtube.com/watch?v=abcdefghijk") == [720]
+    assert Cache(path, -100456).qualities("https://www.youtube.com/watch?v=abcdefghijk") == []
     assert Cache(path, -100456).get("https://www.youtube.com/watch?v=abcdefghijk", 720) is None
     first.delete("https://www.youtube.com/watch?v=abcdefghijk", 720)
     assert first.get("https://www.youtube.com/watch?v=abcdefghijk", 720) is None
+    assert first.qualities("https://www.youtube.com/watch?v=abcdefghijk") == []
 
 
 def test_upload_progress_counts_file_bytes(tmp_path):

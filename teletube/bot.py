@@ -285,12 +285,15 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
         jobs[key] = pending
         try:
             cached_qualities = cache.qualities(url) if cache and message.chat.id != cache.chat_id else []
-            if cached_qualities:
-                info = {"title": "Cached YouTube video", "qualities": cached_qualities}
-                logger.info("Offering cached qualities for chat %s without contacting YouTube", key[0])
-            else:
+            try:
                 async with semaphore:
                     info = await asyncio.to_thread(get_info, url)
+            except Exception:
+                if not cached_qualities:
+                    raise
+                info = {"title": "Cached YouTube video", "qualities": cached_qualities}
+                logger.warning("YouTube metadata is unavailable; offering cached qualities for chat %s",
+                               key[0], exc_info=True)
             if jobs.get(key) is not pending:
                 return
             if not info["qualities"]:

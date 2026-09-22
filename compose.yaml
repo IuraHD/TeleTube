@@ -1,6 +1,8 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      target: runtime
     env_file: .env
     environment:
       DOWNLOAD_DIR: /app/downloads

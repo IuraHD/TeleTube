@@ -4,5 +4,13 @@ services:
     env_file: .env
     environment:
       DOWNLOAD_DIR: /app/downloads
+      CACHE_DB_PATH: /app/data/cache.sqlite3
+    volumes:
+      - cache-index:/app/data
+    extra_hosts:
+      - host.docker.internal:host-gateway
     restart: unless-stopped
     stop_grace_period: 30s
+
+volumes:
+  cache-index:

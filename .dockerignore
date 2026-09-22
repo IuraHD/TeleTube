@@ -1,13 +1,10 @@
 .git
 .github
 .env
-api_server
-ffmpeg
 downloads
 data
 venv
 .venv
 __pycache__
 *.log
-*.bat
 *.md

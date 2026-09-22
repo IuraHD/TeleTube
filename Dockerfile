@@ -7,11 +7,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY teletube ./teletube
-COPY yt_downloader_bot.py .
 RUN useradd --create-home --uid 10001 bot && mkdir /app/downloads /app/data \
     && chown bot:bot /app/downloads /app/data
 USER bot
-CMD ["python", "yt_downloader_bot.py"]
+CMD ["python", "-m", "teletube"]
 
 FROM runtime AS test
 USER root

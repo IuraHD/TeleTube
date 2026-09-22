@@ -1,67 +1,42 @@
 # TeleTube
 
-TeleTube is a Telegram bot that downloads a single YouTube video at a selected resolution. It uses aiogram for Telegram updates, yt-dlp for extraction, and FFmpeg only when streams need merging or an oversized file needs splitting. It does not re-encode video.
+A Telegram bot for downloading individual YouTube videos. It uses aiogram for the bot, yt-dlp for downloads, and SQLite to index videos cached in an optional private Telegram group.
 
-## Run with Docker
+## Run
 
-Copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN` to the token from BotFather. Then run:
+Install Docker with Compose, copy `.env.example` to `.env`, and set `TELEGRAM_BOT_TOKEN` to your BotFather token. Then run:
 
 ```sh
 docker compose up --build -d
 docker compose logs -f bot
 ```
 
-The default configuration uses Telegram's cloud Bot API. Each upload is kept below 47 MB to leave headroom under its 50 MB limit. Large files are split at existing keyframes where possible. Jobs use isolated temporary directories inside the container and clean them up on completion or failure.
+The bot accepts YouTube watch, Shorts, live, embed, and `youtu.be` links. It asks for a resolution, downloads the best available video at or below that height with audio, and sends it to the requester. The status message shows download and upload progress. A completed upload bar means the file has been read; delivery is complete only after Telegram confirms the message.
 
-The bot shows download progress for the current yt-dlp stream and upload progress based on bytes read from the file. A full upload bar means the bytes have been sent; the bot still waits for Telegram's confirmation before showing “Done.”
+Downloads use separate temporary directories and are removed after delivery. Two jobs can run at once by default (`MAX_CONCURRENT_DOWNLOADS` accepts 1–8). One user can have one active job per chat. Restarting the container clears pending jobs and quality selections.
 
-## Optional Telegram group cache
+## Cache videos in a private group
 
-Add the bot to a private group as an admin. Send `/chatid` **inside that group**; the bot replies with its negative group ID. Put that value in `.env` as `CACHE_CHAT_ID`. The bot's private chat with you has a positive ID and cannot be used as the cache group.
-
-Run with the cache volume so the SQLite index survives container recreation:
+Add the bot as an admin in a private Telegram group and send `/chatid` **in that group**. Set `CACHE_CHAT_ID` in `.env` to the negative ID it returns, then restart the bot:
 
 ```sh
-docker compose -f compose.yaml -f compose.cache.yaml up --build -d
+docker compose up -d --force-recreate
 ```
 
-On a cache miss, TeleTube uploads each part to the group, records its message ID in `data/cache.sqlite3`, then copies the group message to the requester. The key is the canonical YouTube video URL plus chosen resolution. On a hit it copies the saved group message without downloading or uploading the video again. If the group upload fails, delivery falls back to a direct upload. Deleting a cached group message invalidates that entry on its next use.
+For a new video and resolution, the bot uploads the result to the group and saves the group message ID in a SQLite database on the `cache-index` Docker volume. Later requests copy that message to the user without downloading the video again. If the cached message has been deleted, the bot downloads the video again. Without `CACHE_CHAT_ID`, no cache is used and each download is deleted after delivery. Keep the Docker volume if you recreate the container; removing it loses the cache index.
 
-Without `CACHE_CHAT_ID`, no cache database is created and temporary downloads are deleted after delivery. For a local non-Docker run, `data/cache.sqlite3` persists under the project directory when caching is enabled.
+## Video handling
 
-To run the tests in the same Linux environment as the bot:
+TeleTube does not re-encode video. Compatible H.264/AAC MP4 files are sent as Telegram videos with their original dimensions and duration; other formats are sent as documents. FFmpeg is used to merge separate audio and video streams when needed, and to split oversized files at existing keyframes without re-encoding. If a file cannot be split below the upload limit, choose a lower resolution or configure a local Bot API server.
+
+The default cloud Bot API configuration limits each upload part to 47 MB, leaving headroom below Telegram's 50 MB limit. For larger parts, run a [local Bot API server](https://github.com/tdlib/telegram-bot-api) separately, set `USE_LOCAL_API=true` and `LOCAL_API_SERVER` in `.env`, and follow Telegram's [migration procedure](https://core.telegram.org/bots/features#using-a-local-bot-api-server). The local-server part limit is 1.9 GB. The server must be reachable from inside the bot container; `127.0.0.1` there refers to the container itself.
+
+Some YouTube videos may require authentication or expose formats that cannot be downloaded. The bot does not accept cookies or account credentials.
+
+## Test
 
 ```sh
 docker build --target test -t teletube-test .
 ```
 
-The image contains Python, FFmpeg, and the bot; it does not depend on a bundled Windows executable.
-
-## Run without Docker
-
-Install Python 3.11 or newer, FFmpeg and FFprobe on `PATH`. On Windows or Linux, create a virtual environment and install dependencies:
-
-```sh
-python -m venv venv
-venv/bin/python -m pip install -r requirements.txt    # Linux
-# venv\Scripts\python.exe -m pip install -r requirements.txt  # Windows
-```
-
-Copy `.env.example` to `.env`, set the token, then run `venv/bin/python yt_downloader_bot.py` on Linux or `venv\Scripts\python.exe yt_downloader_bot.py` on Windows. The `setup` and `run_*` scripts are shortcuts for these steps. FFmpeg is a separate system dependency; the setup scripts do not delete an existing environment or download binaries.
-
-## Local Bot API server
-
-For uploads above the cloud limit, run a [Telegram Local Bot API server](https://github.com/tdlib/telegram-bot-api) separately and set `USE_LOCAL_API=true` and `LOCAL_API_SERVER` in `.env`. TeleTube sends multipart uploads, so the server can be on another machine or in another container. The bot caps parts at 1.9 GB under the local server's 2 GB limit. Follow Telegram's [migration instructions](https://core.telegram.org/bots/features#using-a-local-bot-api-server) when switching an existing bot from the cloud API.
-
-## Behavior and limits
-
-- Send a YouTube watch, Shorts, live, embed, or youtu.be video URL. Playlists and arbitrary websites are rejected.
-- Choose one of the available resolutions. The bot downloads the best video at or below that height, plus audio where available.
-- Two jobs can process concurrently by default; set `MAX_CONCURRENT_DOWNLOADS` to 1–8. A user can have one active job per chat.
-- Compatible H.264/AAC MP4s are sent as Telegram videos with their duration and dimensions. Other formats are sent as documents with their original streams. Splitting uses stream copy, preserving codecs, resolution and frame rate. If existing keyframes cannot produce parts below the upload limit, choose a lower quality or the local Bot API.
-- Cancellation interrupts yt-dlp downloads and FFmpeg work. An upload already in progress may finish before cancellation takes effect.
-- Downloads and quality selections are held in memory. Restarting the bot discards pending choices and work. There is no persistent queue or retry after restart.
-- Cache entries persist in SQLite when enabled; the group messages must remain available and the bot must retain access to the group.
-- YouTube may change its delivery formats or require authentication for some videos. TeleTube does not accept credentials or cookies.
-
-Check `docker compose logs bot` or the console for errors. Do not commit `.env` or download files.
+The test stage runs the Python suite in Linux. CI runs the same command on pushes and pull requests. Do not commit `.env`, BotFather tokens, or downloaded media.

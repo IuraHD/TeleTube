@@ -1,7 +1,0 @@
-services:
-  bot:
-    volumes:
-      - cache-index:/app/data
-
-volumes:
-  cache-index:

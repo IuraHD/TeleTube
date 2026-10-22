@@ -48,11 +48,23 @@ def available_qualities(info: dict) -> list[int]:
                    and fmt.get("ext") in {"mp4", "webm"}}, reverse=True)
 
 
+def _youtube_options() -> dict:
+    """Use the same connection and token provider for extraction and downloads."""
+    options = {}
+    if proxy := os.getenv("YOUTUBE_PROXY", "").strip():
+        options["proxy"] = proxy
+    if provider := os.getenv("YOUTUBE_POT_BASE_URL", "").strip():
+        options["extractor_args"] = {
+            "youtube": {"player_client": ["mweb"]},
+            "youtubepot-bgutilhttp": {"base_url": [provider]},
+        }
+    return options
+
+
 def get_info(url: str) -> dict:
     options = {"quiet": True, "no_warnings": True, "noplaylist": True,
                "socket_timeout": 20, "retries": 2, "extract_flat": False}
-    if proxy := os.getenv("YOUTUBE_PROXY", "").strip():
-        options["proxy"] = proxy
+    options.update(_youtube_options())
     with YoutubeDL(options) as ydl:
         info = ydl.extract_info(url, download=False)
     if not info or info.get("_type") == "playlist":
@@ -93,8 +105,7 @@ def download(url: str, height: int, directory: Path, cancel: threading.Event,
         "merge_output_format": "mp4", "progress_hooks": [progress],
         "restrictfilenames": True, "overwrites": True,
     }
-    if proxy := os.getenv("YOUTUBE_PROXY", "").strip():
-        options["proxy"] = proxy
+    options.update(_youtube_options())
     with YoutubeDL(options) as ydl:
         ydl.extract_info(url, download=True)
     _check(cancel)

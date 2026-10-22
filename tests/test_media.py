@@ -35,7 +35,8 @@ def test_unique_qualities():
     assert available_qualities(info) == [720, 480]
 
 
-def test_youtube_proxy_applies_to_metadata_and_download(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["", "http://pot:4416"])
+def test_youtube_proxy_applies_to_metadata_and_download(monkeypatch, tmp_path, provider):
     options_seen = []
 
     class FakeYoutubeDL:
@@ -54,12 +55,21 @@ def test_youtube_proxy_applies_to_metadata_and_download(monkeypatch, tmp_path):
             return {"title": "Fixture", "formats": []}
 
     monkeypatch.setenv("YOUTUBE_PROXY", "socks5://proxy.example:1080")
+    monkeypatch.setenv("YOUTUBE_POT_BASE_URL", provider)
     monkeypatch.setattr(media, "YoutubeDL", FakeYoutubeDL)
     media.get_info("https://www.youtube.com/watch?v=abcdefghijk")
     media.download("https://www.youtube.com/watch?v=abcdefghijk", 240,
                    tmp_path, threading.Event())
     assert [options["proxy"] for options in options_seen] == [
         "socks5://proxy.example:1080", "socks5://proxy.example:1080"]
+    for options in options_seen:
+        if provider:
+            assert options["extractor_args"] == {
+                "youtube": {"player_client": ["mweb"]},
+                "youtubepot-bgutilhttp": {"base_url": [provider]},
+            }
+        else:
+            assert "extractor_args" not in options
 
 
 def make_video(path, seconds=5, codec="libx264"):

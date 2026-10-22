@@ -1,3 +1,5 @@
 aiogram==3.31.0
-yt-dlp>=2026.8.19
+yt-dlp[default]==2026.10.21
+deno==2.9.8
+bgutil-ytdlp-pot-provider==2.0.2
 python-dotenv>=1.0,<2

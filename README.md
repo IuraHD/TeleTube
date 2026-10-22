@@ -36,14 +36,16 @@ The database lives on the `cache-index` Docker volume. Keep that volume when rec
 
 ## Optional Cloudflare WARP proxy
 
-If YouTube blocks the server's IP, the included Compose overlay can route yt-dlp through Cloudflare WARP's free local proxy. It uses Cloudflare's official Linux client in a separate container; only yt-dlp uses it. The proxy has no published host port, and its registration persists in the `warp-state` volume.
+If YouTube blocks the server's IP, the included Compose overlay routes yt-dlp through Cloudflare WARP's free local proxy and starts a BgUtils proof-of-origin token provider. The bot uses YouTube's mobile web client with tokens for both metadata and downloads. It uses Cloudflare's official Linux client in a separate container; Telegram traffic stays direct. Neither helper publishes a host port, and WARP's registration persists in the `warp-state` volume.
 
 ```sh
 docker compose -f compose.yaml -f compose.warp.yaml up --build -d
 docker compose -f compose.yaml -f compose.warp.yaml ps
 ```
 
-Confirm that `warp` is healthy before sending a new link. The proxy applies to metadata and the full media download. YouTube may also block WARP's shared exit IP, so a working test is required for each deployment. To stop using WARP, start the base Compose file again and remove `YOUTUBE_PROXY` from `.env` if you set it manually.
+Confirm that `warp` is healthy before sending a new link. The proxy applies to metadata, token generation, and the full media download. YouTube may also block WARP's shared exit IP, so a working test is required for each deployment. To stop using WARP, start the base Compose file again and remove `YOUTUBE_PROXY` and `YOUTUBE_POT_BASE_URL` from `.env` if you set them manually.
+
+The image includes Deno and yt-dlp's JavaScript challenge solver. Downloader and token-provider versions are pinned in `requirements.txt` and the overlay; update those versions and rebuild when YouTube changes require an upgrade. Updating packages on the host does not update the running container.
 
 ## Configuration
 
@@ -52,6 +54,7 @@ Confirm that `warp` is healthy before sending a new link. The proxy applies to m
 | `TELEGRAM_BOT_TOKEN` | Required BotFather token. |
 | `CACHE_CHAT_ID` | Optional negative ID of the private cache group. Leave blank to disable caching. |
 | `YOUTUBE_PROXY` | Optional HTTP, HTTPS, or SOCKS proxy URL for yt-dlp. It handles both metadata requests and video downloads; Telegram traffic stays direct. |
+| `YOUTUBE_POT_BASE_URL` | Optional BgUtils token server URL. Enables the mobile web client and automatic proof-of-origin tokens. Set automatically by the WARP overlay to `http://pot:4416`; keep this unauthenticated service on a private network. |
 | `MAX_CONCURRENT_DOWNLOADS` | Number of simultaneous jobs, from 1 to 8; default is 2. One user can have one active job per chat. |
 | `LOG_LEVEL` | Python log level; default is `INFO`. |
 | `USE_LOCAL_API`, `LOCAL_API_SERVER` | Optional [local Bot API server](https://github.com/tdlib/telegram-bot-api) for larger uploads. The server runs separately and must be reachable from the container. |

@@ -22,7 +22,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 from teletube.cache import Cache
 from teletube.config import Settings
 from teletube.donations import AMOUNTS, DonationReceipts, amount_from, payload_for
-from teletube.media import Cancelled, download, get_info, media_details, prepare_video, video_url
+from teletube.media import MP3, Cancelled, download, get_info, media_details, prepare_video, video_url
 from teletube.progress import ProgressInputFile, progress_bar
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,10 @@ class Job:
 
 def keyboard(job: Job) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{height}p", callback_data=f"q:{job.nonce}:{height}")]
-        for height in job.qualities[:12]
+        [InlineKeyboardButton(text="MP3" if height == MP3 else f"{height}p",
+                              callback_data=f"q:{job.nonce}:{height}")]
+        for height in [h for h in job.qualities if h != MP3][:12]
+        + ([MP3] if MP3 in job.qualities else [])
     ])
 
 
@@ -132,6 +134,13 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
 
         details = await asyncio.to_thread(media_details, part)
         media = ProgressInputFile(part, report)
+        if details.get("as_audio"):
+            media.filename = ("".join(c if c.isalnum() or c in " ._-" else "_"
+                                      for c in job.title[:150]).strip(" .") or "audio") + ".mp3"
+            return await bot.send_audio(destination, media, caption=caption,
+                                        duration=details["duration"], title=job.title[:200],
+                                        performer=job.uploader[:200] or None,
+                                        request_timeout=1800)
         if details["as_video"]:
             return await bot.send_video(destination, media, caption=caption,
                                         duration=details["duration"], width=details["width"],
@@ -143,6 +152,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     async def perform(bot: Bot, chat_id: int, user_id: int, message_id: int,
                       job: Job, height: int) -> None:
         key = (chat_id, user_id)
+        selection = "MP3" if height == MP3 else f"{height}p"
         lock = cache_locks.setdefault((job.url, height), asyncio.Lock()) if cache else asyncio.Lock()
         try:
             async with lock:
@@ -151,8 +161,8 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                 if cache and chat_id != cache.chat_id:
                     saved = cache.get(job.url, height)
                     if saved:
-                        logger.info("Cache hit for chat %s at %sp (%s part(s))",
-                                    chat_id, height, len(saved))
+                        logger.info("Cache hit for chat %s at %s (%s part(s))",
+                                    chat_id, selection, len(saved))
                         job.stage = "copy"
                         await status(bot, chat_id, message_id, "Sending from cache…")
                         copied = 0
@@ -176,9 +186,9 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                     if job.cancel.is_set():
                         raise Cancelled()
                     job.stage = "download"
-                    logger.info("Starting %sp download for chat %s user %s", height, chat_id, user_id)
+                    logger.info("Starting %s download for chat %s user %s", selection, chat_id, user_id)
                     await status(bot, chat_id, message_id,
-                                 f"Downloading {height}p…", cancel_keyboard(job))
+                                 f"Downloading {selection}…", cancel_keyboard(job))
                     loop = asyncio.get_running_loop()
                     progress_state = {"format": None, "stream": 0,
                                       "last_time": 0.0, "last_text": ""}
@@ -273,7 +283,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                 explanation = ("This video cannot be split without changing its streams. "
                                "Try a lower quality or a local Bot API server.")
             else:
-                explanation = "Could not download or send this video. Try another quality or link."
+                explanation = "Could not download or send this media. Try another quality or link."
             await status(bot, chat_id, message_id, explanation)
         finally:
             if jobs.get(key) is job:
@@ -282,7 +292,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         markup = await donation_keyboard(message.bot) if message.chat.type == "private" else None
-        await message.answer("Send a YouTube video link and choose a quality. "
+        await message.answer("Send a YouTube link and choose a video quality or MP3 for audio. "
                              "You can also use /donate to support the bot.", reply_markup=markup)
 
     @router.message(Command("donate"))
@@ -359,14 +369,18 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
             except Exception:
                 if not cached_qualities:
                     raise
-                info = {"title": "Cached YouTube video", "qualities": cached_qualities}
+                info = {"title": "Cached YouTube media", "qualities": cached_qualities,
+                        "audio_available": False}
                 logger.warning("YouTube metadata is unavailable; offering cached qualities for chat %s",
                                key[0], exc_info=True)
             if jobs.get(key) is not pending:
                 return
-            if not info["qualities"]:
-                raise ValueError("No downloadable video qualities were found")
-            job = Job(nonce, url, info["title"], info["qualities"], threading.Event(),
+            qualities = list(info["qualities"])
+            if info.get("audio_available", False) and MP3 not in qualities:
+                qualities.append(MP3)
+            if not qualities:
+                raise ValueError("No downloadable audio or video was found")
+            job = Job(nonce, url, info["title"], qualities, threading.Event(),
                       info.get("duration"), info.get("uploader", ""))
             jobs[key] = job
             logger.info("Offered %s quality choices for chat %s user %s", len(job.qualities),
@@ -382,7 +396,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
                 summary += "\n"
             await status(message.bot, message.chat.id, notice.message_id,
                          f"<b>{html.escape(job.title[:200])}</b>\n"
-                         f"{summary}Choose quality:", keyboard(job))
+                         f"{summary}Choose video quality or MP3:", keyboard(job))
         except Exception as error:
             logger.exception("Failed to read video metadata")
             explanation = ("YouTube is blocking requests from this server right now. "

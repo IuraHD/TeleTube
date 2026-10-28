@@ -79,6 +79,52 @@ def make_video(path, seconds=5, codec="libx264"):
                     "-c:v", codec, "-g", "24", "-threads", "1", "-c:a", "aac", str(path)], check=True)
 
 
+def make_audio(path, seconds=5):
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+                    "-c:a", "libmp3lame", "-b:a", "192k", str(path)], check=True)
+
+
+def test_mp3_download_converts_audio_without_video(monkeypatch, tmp_path):
+    fixture = tmp_path / "fixture.mp4"
+    make_video(fixture)
+    directory = tmp_path / "download"
+    directory.mkdir()
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            assert options["format"] == "bestaudio/best"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def extract_info(self, url, download):
+            (directory / "source.mp4").write_bytes(fixture.read_bytes())
+
+    monkeypatch.setattr(media, "YoutubeDL", FakeYoutubeDL)
+    output = media.download("https://www.youtube.com/watch?v=abcdefghijk", media.MP3,
+                            directory, threading.Event())
+    streams = probe(output)["streams"]
+    assert output.suffix == ".mp3"
+    assert len(streams) == 1 and streams[0]["codec_name"] == "mp3"
+    assert media_details(output)["as_audio"]
+    assert 4 <= media_details(output)["duration"] <= 6
+
+
+def test_oversized_mp3_is_split_into_playable_audio(tmp_path):
+    path = tmp_path / "audio.mp3"
+    make_audio(path, seconds=8)
+    parts = prepare_video(path, 70_000, threading.Event())
+    assert len(parts) > 1
+    assert all(p.suffix == ".mp3" and p.stat().st_size <= 70_000 for p in parts)
+    assert all(media_details(p)["as_audio"] for p in parts)
+    total_duration = sum(float(probe(p)["format"]["duration"]) for p in parts)
+    assert 7.5 <= total_duration <= 8.5
+
+
 def probe(path):
     result = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-show_format",
                              "-of", "json", str(path)], capture_output=True, text=True, check=True)

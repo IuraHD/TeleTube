@@ -15,6 +15,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from yt_dlp import YoutubeDL
 
+# Reserved cache/selection key; video resolutions are always positive.
+MP3 = 0
+
 
 class Cancelled(Exception):
     """The requesting user cancelled the job."""
@@ -71,6 +74,8 @@ def get_info(url: str) -> dict:
         raise ValueError("Only single videos are supported")
     return {"title": info.get("title") or "YouTube video",
             "duration": info.get("duration"), "uploader": info.get("uploader") or "",
+            "audio_available": any(f.get("acodec") not in {None, "none"}
+                                   for f in info.get("formats", [])),
             "qualities": available_qualities(info)}
 
 
@@ -81,6 +86,7 @@ def _check(cancel: threading.Event) -> None:
 
 def download(url: str, height: int, directory: Path, cancel: threading.Event,
              on_progress: Callable[[int, int | None, str], None] | None = None) -> Path:
+    """Download a video resolution, or audio converted to MP3 when height is MP3."""
     _check(cancel)
 
     def progress(_status: dict) -> None:
@@ -105,13 +111,21 @@ def download(url: str, height: int, directory: Path, cancel: threading.Event,
         "merge_output_format": "mp4", "progress_hooks": [progress],
         "restrictfilenames": True, "overwrites": True,
     }
+    if height == MP3:
+        options["format"] = "bestaudio/best"
     options.update(_youtube_options())
     with YoutubeDL(options) as ydl:
         ydl.extract_info(url, download=True)
     _check(cancel)
     candidates = [p for p in directory.glob("source.*") if p.is_file()]
     if len(candidates) != 1:
-        raise RuntimeError("Download did not produce one video file")
+        raise RuntimeError("Download did not produce one media file")
+    if height == MP3:
+        output = directory / "audio.mp3"
+        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+              "-i", str(candidates[0]), "-map", "0:a:0", "-vn",
+              "-c:a", "libmp3lame", "-b:a", "192k", str(output)], cancel)
+        return output
     return candidates[0]
 
 
@@ -148,7 +162,11 @@ def media_details(path: Path) -> dict:
     video = next((s for s in streams if s["codec_type"] == "video"), None)
     audio = next((s for s in streams if s["codec_type"] == "audio"), None)
     if not video:
-        raise RuntimeError("Downloaded file has no video stream")
+        if path.suffix.lower() != ".mp3" or not audio or audio["codec_name"] != "mp3":
+            raise RuntimeError("Downloaded file has no supported audio or video stream")
+        return {"as_audio": True, "as_video": False,
+                "duration": int(float(info["format"].get("duration") or 0)),
+                "audio_codec": audio["codec_name"]}
     return {
         "as_video": path.suffix.lower() == ".mp4" and video["codec_name"] == "h264"
                     and (audio is None or audio["codec_name"] == "aac"),
@@ -161,7 +179,7 @@ def media_details(path: Path) -> dict:
 
 
 def prepare_video(path: Path, limit: int, cancel: threading.Event) -> list[Path]:
-    """Split oversized files at existing keyframes, preserving all codecs."""
+    """Split oversized video or MP3 files without re-encoding."""
     _check(cancel)
     if path.stat().st_size <= limit:
         return [path]
@@ -171,13 +189,24 @@ def prepare_video(path: Path, limit: int, cancel: threading.Event) -> list[Path]
     if duration <= 0:
         raise RuntimeError("Video duration is unavailable")
     segment_seconds = max(1, int(duration * limit / path.stat().st_size * 0.7))
-    extension = ".mp4" if path.suffix.lower() == ".mp4" else ".mkv"
+    is_audio = path.suffix.lower() == ".mp3"
+    extension = ".mp3" if is_audio else ".mp4" if path.suffix.lower() == ".mp4" else ".mkv"
     for _ in range(8):
         for old in path.parent.glob("part-*.*"):
             old.unlink()
+        # MP3 encoder padding can otherwise leave a final one-frame file that
+        # players cannot probe. Keep that short tail with the previous part.
+        split_options = ["-segment_time", str(segment_seconds)]
+        if is_audio:
+            cuts = [str(t) for t in range(segment_seconds, math.ceil(duration), segment_seconds)
+                    if duration - t >= 0.5]
+            if not cuts:
+                raise RuntimeError("Audio cannot be split below the upload limit")
+            split_options = ["-segment_times", ",".join(cuts)]
         _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
-              "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-f", "segment",
-              "-segment_time", str(segment_seconds), "-reset_timestamps", "1",
+              *(["-map", "0:a:0"] if is_audio else ["-map", "0:v:0", "-map", "0:a:0?"]),
+              "-c", "copy", "-f", "segment",
+              *split_options, "-reset_timestamps", "1",
               str(path.parent / f"part-%03d{extension}")], cancel)
         parts = sorted(path.parent.glob(f"part-*{extension}"))
         if parts and len(parts) <= 100 and all(p.stat().st_size <= limit for p in parts):

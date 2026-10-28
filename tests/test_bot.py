@@ -1,11 +1,12 @@
 import asyncio
 import shutil
+import pytest
 from datetime import datetime, timezone
 
 from aiogram import Bot
 from aiogram.methods import (AnswerCallbackQuery, AnswerPreCheckoutQuery, CopyMessage,
                              CreateInvoiceLink, EditMessageText, SendDocument,
-                             SendMessage, SendVideo)
+                             SendMessage, SendVideo, SendAudio)
 from aiogram.types import (CallbackQuery, Chat, Message, PreCheckoutQuery,
                            SuccessfulPayment, Update, User)
 
@@ -15,7 +16,7 @@ from teletube.config import Settings
 from teletube.cache import Cache
 from teletube.donations import payload_for
 
-from test_media import make_video
+from test_media import make_video, make_audio
 
 
 def test_dispatcher_builds_with_aiogram(tmp_path):
@@ -95,9 +96,10 @@ def test_two_users_in_same_chat_keep_separate_choices_and_files(monkeypatch, tmp
     asyncio.run(scenario())
 
 
-def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp_path):
-    source = tmp_path / "fixture.mp4"
-    make_video(source)
+@pytest.mark.parametrize("height", [240, 0])
+def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp_path, height):
+    source = tmp_path / ("fixture.mp3" if height == 0 else "fixture.mp4")
+    (make_audio if height == 0 else make_video)(source)
     chat = Chat(id=123, type="private")
     user = User(id=42, is_bot=False, first_name="Owner")
     edits = []
@@ -117,7 +119,11 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
         if isinstance(method, EditMessageText):
             edits.append(method)
             return True
-        if isinstance(method, SendVideo):
+        if isinstance(method, (SendVideo, SendAudio)):
+            assert isinstance(method, SendAudio if height == 0 else SendVideo)
+            if height == 0:
+                assert method.title == "Fixture" and method.performer == "Artist"
+                assert method.audio.filename == "Fixture.mp3"
             uploads.append(method)
             return Message(message_id=500, date=datetime.now(timezone.utc),
                            chat=Chat(id=-100999, type="supergroup"))
@@ -130,13 +136,15 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
 
     def fake_download(url, height, directory, cancel, on_progress=None):
         downloads.append((url, height))
-        path = directory / "source.mp4"
+        path = directory / source.name
         shutil.copyfile(source, path)
         return path
 
     monkeypatch.setattr(Bot, "__call__", fake_call)
     monkeypatch.setattr(bot_module, "get_info",
-                        lambda url: {"title": "Fixture", "qualities": [240]})
+                        lambda url: {"title": "Fixture", "uploader": "Artist",
+                                     "qualities": [] if height == 0 else [240],
+                                     "audio_available": True})
     monkeypatch.setattr(bot_module, "download", fake_download)
 
     async def scenario():
@@ -144,6 +152,9 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
                             "http://127.0.0.1:8081", 2, 47_000_000,
                             -100999, tmp_path / "data" / "cache.sqlite3")
         dp = create_dispatcher(settings)
+        if height == 0:
+            Cache(settings.cache_db_path, -100999).put(
+                "https://www.youtube.com/watch?v=abcdefghijk", 240, [400])
         bot = Bot(settings.token)
         try:
             for request in (1, 2):
@@ -172,7 +183,7 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
             assert uploads[0].chat_id == -100999
             assert all(c.from_chat_id == -100999 and c.chat_id == 123 for c in copies)
             assert Cache(settings.cache_db_path, -100999).get(
-                "https://www.youtube.com/watch?v=abcdefghijk", 240) == [500]
+                "https://www.youtube.com/watch?v=abcdefghijk", height) == [500]
         finally:
             await dp.emit_shutdown()
             await bot.session.close()
@@ -180,7 +191,8 @@ def test_group_cache_reuses_telegram_message_without_redownload(monkeypatch, tmp
     asyncio.run(scenario())
 
 
-def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_path):
+@pytest.mark.parametrize("height", [240, 0])
+def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_path, height):
     chat = Chat(id=123, type="private")
     user = User(id=42, is_bot=False, first_name="Owner")
     edits = []
@@ -220,7 +232,7 @@ def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_pa
                             "http://127.0.0.1:8081", 2, 47_000_000,
                             -100999, tmp_path / "data" / "cache.sqlite3")
         url = "https://www.youtube.com/watch?v=abcdefghijk"
-        Cache(settings.cache_db_path, -100999).put(url, 240, [500])
+        Cache(settings.cache_db_path, -100999).put(url, height, [500])
         dp = create_dispatcher(settings)
         bot = Bot(settings.token)
         try:
@@ -228,6 +240,8 @@ def test_cached_video_is_offered_when_youtube_is_unavailable(monkeypatch, tmp_pa
                               chat=chat, from_user=user,
                               text="https://youtu.be/abcdefghijk")
             await dp.feed_update(bot, Update(update_id=1, message=message))
+            assert [row[0].text for row in edits[-1].reply_markup.inline_keyboard] == [
+                "MP3" if height == 0 else "240p"]
             choice = edits[-1].reply_markup.inline_keyboard[0][0].callback_data
             callback = CallbackQuery(id="1", from_user=user, chat_instance="test",
                                      message=Message(message_id=101,
@@ -265,7 +279,8 @@ def test_cached_link_still_offers_uncached_qualities(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Bot, "__call__", fake_call)
     monkeypatch.setattr(bot_module, "get_info",
-                        lambda url: {"title": "Fixture", "qualities": [1080, 240]})
+                        lambda url: {"title": "Fixture", "qualities": [1080, 240],
+                                     "audio_available": True})
 
     async def scenario():
         settings = Settings("123:abc", tmp_path / "downloads", False,
@@ -281,7 +296,7 @@ def test_cached_link_still_offers_uncached_qualities(monkeypatch, tmp_path):
                               text="https://youtu.be/abcdefghijk")
             await dp.feed_update(bot, Update(update_id=1, message=message))
             buttons = edits[-1].reply_markup.inline_keyboard
-            assert [row[0].text for row in buttons] == ["1080p", "240p"]
+            assert [row[0].text for row in buttons] == ["1080p", "240p", "MP3"]
         finally:
             await dp.emit_shutdown()
             await bot.session.close()
@@ -356,9 +371,10 @@ def test_stars_donation_opens_invoice_link_and_records_receipt(monkeypatch, tmp_
     asyncio.run(scenario())
 
 
-def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path):
-    source = tmp_path / "fixture.mp4"
-    make_video(source)
+@pytest.mark.parametrize("height", [240, 0])
+def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path, height):
+    source = tmp_path / ("fixture.mp3" if height == 0 else "fixture.mp4")
+    (make_audio if height == 0 else make_video)(source)
     chat = Chat(id=123, type="private")
     user = User(id=42, is_bot=False, first_name="Owner")
     edits = []
@@ -371,7 +387,8 @@ def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path):
         if isinstance(method, EditMessageText):
             edits.append(method)
             return True
-        if isinstance(method, SendVideo):
+        if isinstance(method, (SendVideo, SendAudio)):
+            assert isinstance(method, SendAudio if height == 0 else SendVideo)
             uploads.append(method)
             return Message(message_id=500 + len(uploads), date=datetime.now(timezone.utc),
                            chat=chat)
@@ -380,13 +397,14 @@ def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path):
         raise AssertionError(type(method))
 
     def fake_download(url, height, directory, cancel, on_progress=None):
-        destination = directory / "source.mp4"
+        destination = directory / source.name
         shutil.copyfile(source, destination)
         return destination
 
     monkeypatch.setattr(Bot, "__call__", fake_call)
     monkeypatch.setattr(bot_module, "get_info",
-                        lambda url: {"title": "Fixture", "qualities": [240]})
+                        lambda url: {"title": "Fixture", "qualities": [] if height == 0 else [240],
+                                     "audio_available": True})
     monkeypatch.setattr(bot_module, "download", fake_download)
     monkeypatch.setattr(bot_module, "prepare_video", lambda path, limit, cancel: [path, path])
 
@@ -413,7 +431,7 @@ def test_split_video_is_delivered_without_caching_parts(monkeypatch, tmp_path):
                 await asyncio.sleep(0.05)
             assert [item.chat_id for item in uploads] == [123, 123]
             assert Cache(settings.cache_db_path, -100999).get(
-                "https://www.youtube.com/watch?v=abcdefghijk", 240) is None
+                "https://www.youtube.com/watch?v=abcdefghijk", height) is None
         finally:
             await dp.emit_shutdown()
             await bot.session.close()

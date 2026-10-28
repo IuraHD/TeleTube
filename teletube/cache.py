@@ -1,4 +1,4 @@
-"""Persistent index of videos stored in a private Telegram group."""
+"""Persistent media index; positive heights identify videos and 0 identifies MP3."""
 
 import json
 import sqlite3
@@ -43,7 +43,7 @@ class Cache:
 
     def put(self, video_url: str, height: int, message_ids: list[int]) -> None:
         if len(message_ids) != 1 or message_ids[0] <= 0:
-            raise ValueError("Only a complete video in one Telegram message can be cached")
+            raise ValueError("Only complete media in one Telegram message can be cached")
         with self._connect() as db:
             db.execute("""INSERT OR REPLACE INTO cached_video
                           (video_url, height, chat_id, message_ids) VALUES (?, ?, ?, ?)""",

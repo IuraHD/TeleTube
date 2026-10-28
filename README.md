@@ -1,6 +1,6 @@
 # TeleTube
 
-TeleTube sends individual YouTube videos to Telegram at a resolution you choose. It runs on aiogram and yt-dlp. A private Telegram group can serve as a cache, with SQLite storing the message IDs needed to reuse its videos.
+TeleTube sends individual YouTube videos to Telegram at a resolution you choose, or extracts their audio as MP3. It runs on aiogram and yt-dlp. A private Telegram group can serve as a cache, with SQLite storing the message IDs needed to reuse its media.
 
 ## Run with Docker
 
@@ -12,7 +12,7 @@ TeleTube sends individual YouTube videos to Telegram at a resolution you choose.
    docker compose logs -f bot
    ```
 
-Send the bot a YouTube watch, Shorts, live, embed, or `youtu.be` link. It offers the available resolutions, downloads the selected video, and sends it back. Playlists and links to other sites are rejected.
+Send the bot a YouTube watch, Shorts, live, embed, or `youtu.be` link. Choose an available video resolution or **MP3** in the same selector. MP3 downloads use the best available audio, convert it to 192 kbps MP3, and send it as a Telegram audio track with the title and uploader. Converting to MP3 does not improve the source audio quality. Playlists and links to other sites are rejected.
 
 The status message shows download and upload progress. When the upload bar reaches 100%, the file has been read from disk; the bot still waits for Telegram to confirm delivery before showing that the job is done. Each job has its own temporary directory, which is removed afterward. A restart discards pending selections and downloads.
 
@@ -33,6 +33,8 @@ Without a cache group, every request downloads and sends the video again. To reu
 On a miss, the bot uploads a complete video to the group and records its message ID in SQLite. If a video must be split to fit Telegram's upload limit, its parts are sent directly to the requester and are not cached. When you send a cached link again, the bot checks YouTube for the full quality list; if YouTube is unavailable, it offers the cached resolutions. Selecting a cached resolution copies its message to the requester without downloading the file again. The key is the YouTube video and selected resolution. If a cached group message has been deleted, the bot removes that entry and downloads the video again. A failed cache upload falls back to direct delivery.
 
 The database lives on the `cache-index` Docker volume. Keep that volume when recreating the container; deleting it loses the index. The cached videos themselves remain in the Telegram group.
+
+Complete MP3 tracks are cached separately from video resolutions. Internally, the existing SQLite index reserves height `0` for MP3, so no database migration is needed. Split audio tracks are delivered directly without caching. When YouTube is unavailable, the selector offers MP3 only if that track is already cached.
 
 ## Optional Cloudflare WARP proxy
 
@@ -64,6 +66,8 @@ The standard Telegram Bot API permits files up to 50 MB, so TeleTube limits each
 ## Media handling and limits
 
 TeleTube does not re-encode video. It sends compatible H.264/AAC MP4 files as Telegram videos, using their duration and dimensions; other formats go as documents. FFmpeg merges separate audio and video streams when necessary and splits oversized files at existing keyframes without changing their codecs. If keyframes do not allow parts below the upload limit, choose a lower resolution or use a local Bot API server.
+
+MP3 mode downloads audio without video when YouTube provides an audio-only format. FFmpeg converts the audio to MP3 and splits oversized tracks into playable MP3 parts without another conversion. Cancellation, transfer progress, concurrent-download limits, and temporary-file cleanup also apply to MP3 jobs.
 
 YouTube may change its formats or block some downloads, especially from cloud server IPs. Cached videos remain available when fresh extraction is blocked. If the server IP is blocked, set `YOUTUBE_PROXY` to an outbound connection that can access YouTube, then recreate the container. The proxy must be able to carry the full video download. TeleTube does not accept YouTube account credentials or cookies. For errors, inspect `docker compose logs bot`.
 
